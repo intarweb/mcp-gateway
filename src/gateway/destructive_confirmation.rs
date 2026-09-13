@@ -55,7 +55,9 @@ use std::time::Duration;
 
 use tracing::warn;
 
-use crate::gateway::meta_mcp_tool_defs::{MetaToolGates, build_code_mode_tools, build_meta_tools};
+use crate::gateway::meta_mcp_tool_defs::{
+    MetaToolGates, ToolTotal, build_code_mode_tools, build_meta_tools,
+};
 use crate::gateway::proxy::{ProxyManager, SamplingError};
 use crate::protocol::ElicitationCreateParams;
 
@@ -234,7 +236,7 @@ static DESTRUCTIVE_META_TOOLS: LazyLock<HashSet<String>> = LazyLock::new(|| {
             cost_report: true,
             webhook_status: true,
         },
-        0,
+        ToolTotal::Unknown,
         0,
     );
     tools.extend(build_code_mode_tools());
@@ -428,7 +430,7 @@ mod tests {
                 cost_report: true,
                 webhook_status: true,
             },
-            0,
+            ToolTotal::Exact(0),
             0,
         );
         tools.extend(build_code_mode_tools());
@@ -480,7 +482,7 @@ mod tests {
                 cost_report: true,
                 webhook_status: true,
             },
-            0,
+            ToolTotal::Exact(0),
             0,
         );
         tools.extend(build_code_mode_tools());

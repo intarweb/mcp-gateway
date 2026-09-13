@@ -56,6 +56,32 @@ impl Backend {
             .with_cached(|tools| tools.map_or(0, |tools| tools.len()))
     }
 
+    /// Return whether this backend has ever been enumerated.
+    ///
+    /// [`Self::cached_tools_count`] returns `0` both for a backend that genuinely
+    /// exposes no tools and for one that has simply never been enumerated, so a
+    /// caller that publishes the count — or acts on it — needs this to tell the
+    /// two apart. `false` means "unknown", not "empty".
+    #[must_use]
+    pub fn cached_tools_known(&self) -> bool {
+        self.tools_cache.ever_populated()
+    }
+
+    /// Return the cached tool count and the ever-enumerated flag as one read.
+    ///
+    /// [`Self::cached_tools_count`] and [`Self::cached_tools_known`] are separate
+    /// lock acquisitions, so a caller that publishes them together can observe a
+    /// fetch landing between the two and report the pair `(0, true)` — "this
+    /// backend exposes no tools, and that is a real answer". Use this wherever
+    /// the two travel together.
+    #[must_use]
+    pub fn cached_tools_count_and_known(&self) -> (usize, bool) {
+        self.tools_cache
+            .with_cached_and_populated(|tools, populated| {
+                (tools.map_or(0, |tools| tools.len()), populated)
+            })
+    }
+
     /// Return the names of all cached tools (non-blocking, no network I/O).
     ///
     /// Returns an empty `Vec` when the cache is empty or has never been populated.

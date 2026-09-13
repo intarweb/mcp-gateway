@@ -179,6 +179,11 @@ impl MetaMcp {
                 "running": status.running,
                 "transport": status.transport,
                 "tools_count": status.tools_cached,
+                // tools_count is a cache reading, not a property of the backend:
+                // an unenumerated backend reports 0 exactly like one that genuinely
+                // exposes no tools. Readers must consult this before treating 0 as
+                // "empty" — see cached_tools_known().
+                "tools_known": status.tools_known,
                 "circuit_breaker": status.circuit_state,
                 "status": if killed { "disabled" } else { "active" }
             });
@@ -198,6 +203,9 @@ impl MetaMcp {
                 "running": true,
                 "transport": "capability",
                 "tools_count": status.capabilities_count,
+                // Capabilities load from disk at startup, so their count is always
+                // a real enumeration — unlike a backend's cache reading.
+                "tools_known": true,
                 "circuit_breaker": "closed",
                 "status": if killed { "disabled" } else { "active" }
             }));

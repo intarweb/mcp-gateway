@@ -555,12 +555,17 @@ impl Backend {
     pub fn status(&self) -> BackendStatus {
         let entry = self.shared_entry();
         let health = entry.failsafe.health_metrics();
+        // Read as a pair: taken separately, a fetch landing between the two reads
+        // publishes `{tools_cached: 0, tools_known: true}` — a confirmed claim
+        // that a backend nobody has enumerated exposes no tools.
+        let (tools_cached, tools_known) = self.cached_tools_count_and_known();
         BackendStatus {
             name: self.name.clone(),
             running: self.is_running(),
             lifecycle: self.lifecycle(),
             transport: self.config.transport.transport_type().to_string(),
-            tools_cached: self.cached_tools_count(),
+            tools_cached,
+            tools_known,
             circuit_state: entry.failsafe.circuit_breaker.state().as_str().to_string(),
             request_count: self.request_count.load(Ordering::Relaxed),
             healthy: health.healthy,

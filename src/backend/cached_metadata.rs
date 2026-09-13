@@ -20,6 +20,11 @@ struct CachedMetadataState<T> {
     value: Option<Arc<T>>,
     cached_at: Option<Instant>,
     in_flight: Option<watch::Sender<()>>,
+    /// Sticky: set the first time a fetch stores a value, never cleared. The
+    /// cached `value` is not a substitute — `invalidate_if` clears it, so
+    /// `value.is_some()` would report a backend that was enumerated a moment
+    /// ago as never having been enumerated.
+    ever_populated: bool,
 }
 
 impl<T> Default for CachedMetadataState<T> {
@@ -28,6 +33,7 @@ impl<T> Default for CachedMetadataState<T> {
             value: None,
             cached_at: None,
             in_flight: None,
+            ever_populated: false,
         }
     }
 }
@@ -79,6 +85,32 @@ impl<T> CachedMetadata<T> {
         let mut state = self.state.write();
         state.value = Some(value);
         state.cached_at = Some(Instant::now());
+        state.ever_populated = true;
+    }
+
+    /// Whether a fetch has ever stored a value here.
+    ///
+    /// Not `value.is_some()`: the value is cleared by `invalidate_if` and can
+    /// be re-fetched, so the slot says "what is cached now" while this says
+    /// "has this backend been enumerated at all". Callers that publish a count
+    /// need the latter — an empty list is a real answer and must not read as
+    /// "never asked".
+    pub(crate) fn ever_populated(&self) -> bool {
+        self.state.read().ever_populated
+    }
+
+    /// Read the cached value and the ever-populated flag under ONE guard.
+    ///
+    /// Callers that publish these together must not take them separately: a
+    /// fetch storing between two acquisitions yields the pair `(None, true)`,
+    /// which reads as "this backend was enumerated and exposes nothing" — a
+    /// confirmed lie, and the exact confusion the pair exists to prevent.
+    pub(crate) fn with_cached_and_populated<R>(
+        &self,
+        map: impl FnOnce(Option<&Arc<T>>, bool) -> R,
+    ) -> R {
+        let state = self.state.read();
+        map(state.value.as_ref(), state.ever_populated)
     }
 
     /// Forget the cached value only if it still satisfies `discard`.

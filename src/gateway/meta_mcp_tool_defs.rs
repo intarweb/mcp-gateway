@@ -42,15 +42,57 @@ fn build_list_servers_tool(server_count: usize) -> Tool {
     }
 }
 
+/// A tool total the gateway can honestly advertise.
+///
+/// The count is a sum over the tool cache, and a backend that has not been
+/// enumerated contributes nothing to it. That makes a bare `0` ambiguous —
+/// "this backend exposes no tools" and "nobody has asked it yet" are the same
+/// number — so every agent-facing surface states which of the three cases it is
+/// in rather than asserting a total it cannot vouch for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolTotal {
+    /// No backend has been enumerated yet, so there is no number to state.
+    Unknown,
+    /// Some backends are still unenumerated: the total is a floor, not a total.
+    AtLeast(usize),
+    /// Every backend has been enumerated: this is the real total.
+    Exact(usize),
+}
+
+impl ToolTotal {
+    /// The noun phrase for agent-facing prose — "42 tools", "at least 42 tools",
+    /// or "tools" when no backend has been enumerated.
+    pub(crate) fn phrase(self) -> String {
+        match self {
+            Self::Unknown => "tools".to_string(),
+            Self::AtLeast(count) => format!("at least {count} tools"),
+            Self::Exact(count) => format!("{count} tools"),
+        }
+    }
+
+    /// Widen by `extra` tools that are known independently of the backend cache
+    /// (capabilities are read from disk, so they are always enumerated). Does not
+    /// turn an unknown into a number: a gateway with nothing enumerated still has
+    /// no honest per-backend total to state.
+    pub(crate) fn plus(self, extra: usize) -> Self {
+        match self {
+            Self::Unknown => Self::Unknown,
+            Self::AtLeast(count) => Self::AtLeast(count + extra),
+            Self::Exact(count) => Self::Exact(count + extra),
+        }
+    }
+}
+
 /// Build the `gateway_list_tools` meta-tool definition.
-fn build_list_tools_tool(tool_count: usize, server_count: usize) -> Tool {
+fn build_list_tools_tool(tool_count: ToolTotal, server_count: usize) -> Tool {
     Tool {
         name: "gateway_list_tools".to_string(),
         title: Some("List Tools".to_string()),
         description: Some(format!(
-            "List tools from a specific backend, or omit server to list all {tool_count} tools \
-         across {server_count} backends. Returns names and descriptions — use \
-         gateway_search_tools for ranked results with full schemas."
+            "List tools from a specific backend, or omit server to list all {} across \
+         {server_count} backends. Returns names and descriptions — use \
+         gateway_search_tools for ranked results with full schemas.",
+            tool_count.phrase()
         )),
         input_schema: json!({
             "type": "object",
@@ -99,15 +141,16 @@ fn search_tools_output_schema() -> serde_json::Value {
 }
 
 /// Build the `gateway_search_tools` meta-tool definition.
-fn build_search_tools_tool(tool_count: usize, server_count: usize) -> Tool {
+fn build_search_tools_tool(tool_count: ToolTotal, server_count: usize) -> Tool {
     Tool {
         name: "gateway_search_tools".to_string(),
         title: Some("Search Tools".to_string()),
         description: Some(format!(
-            "Search {tool_count} tools across {server_count} servers by keyword. Returns ranked \
+            "Search {} across {server_count} servers by keyword. Returns ranked \
          matches (name, description, score) while avoiding the prompt bloat of loading every tool \
          definition upfront. Ranking diagnostics are omitted unless explain is true. \
-         Supports multi-word queries and synonym expansion."
+         Supports multi-word queries and synonym expansion.",
+            tool_count.phrase()
         )),
         input_schema: json!({
             "type": "object",
@@ -166,9 +209,10 @@ fn build_invoke_tool() -> Tool {
 ///
 /// # Arguments
 ///
-/// * `tool_count` — total number of tools cached across all connected backends
+/// * `tool_count` — total tools across all connected backends, or `None` when any
+///   backend has not been enumerated yet
 /// * `server_count` — number of connected backend servers
-pub(crate) fn build_base_tools(tool_count: usize, server_count: usize) -> Vec<Tool> {
+pub(crate) fn build_base_tools(tool_count: ToolTotal, server_count: usize) -> Vec<Tool> {
     vec![
         build_list_servers_tool(server_count),
         build_list_tools_tool(tool_count, server_count),
@@ -575,7 +619,7 @@ pub(crate) struct MetaToolGates {
 /// `docs/design/2026-09-08-perf4-webhook-status-restoration.md`.
 pub(crate) fn build_meta_tools(
     gates: MetaToolGates,
-    tool_count: usize,
+    tool_count: ToolTotal,
     server_count: usize,
 ) -> Vec<Tool> {
     let mut tools = build_base_tools(tool_count, server_count);
@@ -793,7 +837,7 @@ fn governed_meta_tool_names() -> &'static std::collections::HashSet<String> {
                 cost_report: true,
                 webhook_status: true,
             },
-            0,
+            ToolTotal::Unknown,
             0,
         )
         .into_iter()
@@ -897,7 +941,7 @@ impl MetaToolExposure {
 /// output, so `tools/list` and `tools/call` cannot disagree about a tool.
 pub(crate) fn build_meta_tools_filtered(
     gates: MetaToolGates,
-    tool_count: usize,
+    tool_count: ToolTotal,
     server_count: usize,
     exposure: &MetaToolExposure,
 ) -> Vec<Tool> {

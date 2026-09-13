@@ -53,6 +53,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A tool count is no longer reported as `0` before a backend has been
+  enumerated.** `gateway_list_servers`, the `initialize` preamble and the
+  `gateway_list_tools` / `gateway_search_tools` descriptions all derive their
+  total from the tool cache, which is filled lazily; a backend that had not been
+  asked yet contributed `0`, so a cold gateway advertised "0 tools across N
+  backends" and its discovery descriptions said there was nothing to search.
+  The total is now stated as a floor ("at least N tools") until every backend
+  has been enumerated, and left unstated only when none has — so a partially
+  warmed gateway keeps its number instead of losing it. `gateway_list_servers`
+  gains `tools_known` beside `tools_count`, so a reader can tell "exposes no
+  tools" from "not asked yet".
+
 - **Competitive shadow-scan exports now stay portable and loadable.** The
   generated grep rules use the system `grep -E` on macOS and Linux, while the
   Nginx example preserves quoted and escaped log values.

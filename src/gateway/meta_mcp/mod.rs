@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use crate::attestation::signer::BnautAttestationSigner;
-use crate::backend::BackendRegistry;
+use crate::backend::{Backend, BackendRegistry};
 use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
 use crate::config::SurfacedToolConfig;
@@ -58,7 +58,9 @@ use super::meta_mcp_helpers::{
     build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
     wrap_tool_success,
 };
-use super::meta_mcp_tool_defs::{MetaToolExposure, MetaToolGates, build_meta_tools_filtered};
+use super::meta_mcp_tool_defs::{
+    MetaToolExposure, MetaToolGates, ToolTotal, build_meta_tools_filtered,
+};
 use super::webhooks::WebhookRegistry;
 
 mod direct_route;
@@ -1321,16 +1323,18 @@ impl MetaMcp {
 
     fn build_instructions(&self) -> String {
         let backends = self.backends.all();
-        let mut tool_count: usize = backends.iter().map(|b| b.cached_tools_count()).sum();
+        let mut tool_total = tool_total(&backends);
         let mut server_count = backends.len();
 
         if let Some(cap) = self.get_capabilities() {
-            tool_count += cap.get_tools().len();
+            // Capabilities are read from disk at startup, so their count is real
+            // and only widens the floor — never turns an unknown into a number.
+            tool_total = tool_total.plus(cap.get_tools().len());
             server_count += 1;
         }
 
         let mut instructions =
-            build_discovery_preamble(tool_count, server_count, &self.meta_tool_exposure);
+            build_discovery_preamble(tool_total, server_count, &self.meta_tool_exposure);
 
         if let Some(cap) = self.get_capabilities() {
             let caps = cap.list_capabilities();
@@ -1346,11 +1350,10 @@ impl MetaMcp {
     ///
     /// Uses only the in-memory cache — no I/O.  Both counts are 0 when the
     /// registry is empty (e.g. in unit tests).
-    fn backend_counts(&self) -> (usize, usize) {
+    fn backend_counts(&self) -> (ToolTotal, usize) {
         let backends = self.backends.all();
         let server_count = backends.len();
-        let tool_count = backends.iter().map(|b| b.status().tools_cached).sum();
-        (tool_count, server_count)
+        (tool_total(&backends), server_count)
     }
 
     /// Handle `tools/list` — Code Mode returns 2 tools; Traditional returns full set.
@@ -2286,4 +2289,22 @@ async fn destructive_confirmation_gate(
         }
     }
     GateOutcome::Proceed
+}
+
+/// The tool total to advertise, as a floor over the backends enumerated so far.
+///
+/// A backend that has not been enumerated contributes 0 to the sum, so a bare
+/// total cannot distinguish "this backend exposes no tools" from "nobody has
+/// asked it yet". `Exact` only once every backend is in; otherwise the sum is a
+/// lower bound, and with nothing enumerated there is no number to state.
+fn tool_total(backends: &[Arc<Backend>]) -> ToolTotal {
+    let enumerated = backends.iter().filter(|b| b.cached_tools_known()).count();
+    let total: usize = backends.iter().map(|b| b.cached_tools_count()).sum();
+    if enumerated == backends.len() {
+        ToolTotal::Exact(total)
+    } else if enumerated == 0 {
+        ToolTotal::Unknown
+    } else {
+        ToolTotal::AtLeast(total)
+    }
 }

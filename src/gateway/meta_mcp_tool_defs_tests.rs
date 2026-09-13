@@ -20,7 +20,7 @@ fn build_meta_tools_base_count_without_optional_features() {
             cost_report: false,
             webhook_status: false,
         },
-        42,
+        ToolTotal::Exact(42),
         3,
     );
     assert_eq!(tools.len(), 13);
@@ -46,7 +46,7 @@ fn build_meta_tools_with_stats_adds_stats_tool() {
             cost_report: false,
             webhook_status: false,
         },
-        0,
+        ToolTotal::Exact(0),
         0,
     );
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -74,7 +74,7 @@ fn webhook_status_is_enumerated_exactly_when_its_registry_is_attached() {
                             cost_report,
                             webhook_status: attached,
                         },
-                        0,
+                        ToolTotal::Exact(0),
                         0,
                     );
                     assert_eq!(
@@ -100,7 +100,7 @@ fn build_meta_tools_with_reload_adds_reload_tool() {
             cost_report: false,
             webhook_status: false,
         },
-        0,
+        ToolTotal::Exact(0),
         0,
     );
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -116,7 +116,7 @@ fn build_meta_tools_with_cost_report_adds_cost_report_tool() {
             cost_report: true,
             webhook_status: false,
         },
-        0,
+        ToolTotal::Exact(0),
         0,
     );
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -139,7 +139,7 @@ fn build_meta_tools_spans_the_documented_band() {
                 cost_report: true,
                 webhook_status: false
             },
-            0,
+            ToolTotal::Exact(0),
             0
         )
         .len(),
@@ -153,7 +153,7 @@ fn build_meta_tools_spans_the_documented_band() {
                 cost_report: true,
                 webhook_status: true
             },
-            0,
+            ToolTotal::Exact(0),
             0
         )
         .len(),
@@ -163,7 +163,7 @@ fn build_meta_tools_spans_the_documented_band() {
 
 #[test]
 fn build_base_tools_all_have_descriptions() {
-    for tool in build_base_tools(10, 2) {
+    for tool in build_base_tools(ToolTotal::Exact(10), 2) {
         assert!(
             tool.description.is_some(),
             "Tool {} missing description",
@@ -174,7 +174,7 @@ fn build_base_tools_all_have_descriptions() {
 
 #[test]
 fn build_base_tools_all_have_object_schema() {
-    for tool in build_base_tools(10, 2) {
+    for tool in build_base_tools(ToolTotal::Exact(10), 2) {
         assert_eq!(
             tool.input_schema["type"], "object",
             "Tool {} has non-object schema",
@@ -190,7 +190,7 @@ fn base_tools_read_only_have_non_none_annotations() {
     // GIVEN: 5 tools, 2 servers
     // WHEN: building base tools
     // THEN: all 4 base tools have Some(annotations)
-    let tools = build_base_tools(5, 2);
+    let tools = build_base_tools(ToolTotal::Exact(5), 2);
     for tool in &tools {
         assert!(
             tool.annotations.is_some(),
@@ -203,7 +203,7 @@ fn base_tools_read_only_have_non_none_annotations() {
 #[test]
 fn base_tool_read_only_hints_match_spec() {
     // GIVEN: base tools built with 100 tools across 5 servers
-    let tools = build_base_tools(100, 5);
+    let tools = build_base_tools(ToolTotal::Exact(100), 5);
     let by_name = |name: &str| tools.iter().find(|t| t.name == name).unwrap();
 
     // WHEN/THEN: search, list_tools, list_servers are read-only, idempotent, not open-world
@@ -240,7 +240,7 @@ fn all_gateway_meta_tools_have_complete_annotations_with_titles() {
             cost_report: true,
             webhook_status: true,
         },
-        42,
+        ToolTotal::Exact(42),
         3,
     );
     tools.extend(build_code_mode_tools());
@@ -285,7 +285,7 @@ fn search_tools_has_output_schema_with_matches_array() {
     // GIVEN: any counts
     // WHEN: building base tools
     // THEN: gateway_search_tools has an output_schema describing a matches array
-    let tools = build_base_tools(0, 0);
+    let tools = build_base_tools(ToolTotal::Exact(0), 0);
     let search = tools
         .iter()
         .find(|t| t.name == "gateway_search_tools")
@@ -307,7 +307,7 @@ fn base_tool_descriptions_embed_dynamic_counts() {
     // GIVEN: 77 tools across 4 servers
     // WHEN: building base tools
     // THEN: descriptions for search/list/servers contain "77" and "4"
-    let tools = build_base_tools(77, 4);
+    let tools = build_base_tools(ToolTotal::Exact(77), 4);
     let by_name = |name: &str| {
         tools
             .iter()
@@ -496,7 +496,7 @@ fn empty_allow_list_exposes_the_whole_roster() {
             cost_report: true,
             webhook_status: true,
         },
-        42,
+        ToolTotal::Exact(42),
         3,
     );
     let filtered = build_meta_tools_filtered(
@@ -506,7 +506,7 @@ fn empty_allow_list_exposes_the_whole_roster() {
             cost_report: true,
             webhook_status: true,
         },
-        42,
+        ToolTotal::Exact(42),
         3,
         &exposure,
     );
@@ -531,7 +531,7 @@ fn allow_list_yields_only_the_named_tools() {
             cost_report: true,
             webhook_status: true,
         },
-        42,
+        ToolTotal::Exact(42),
         3,
         &exposure,
     );
@@ -595,7 +595,7 @@ fn unfiltered_builder_is_unchanged_by_the_exposure_work() {
             cost_report: false,
             webhook_status: false,
         },
-        42,
+        ToolTotal::Exact(42),
         3,
     );
     assert_eq!(tools.len(), 13);
@@ -645,7 +645,7 @@ fn every_builder_contributes_to_the_governed_set() {
             cost_report: true,
             webhook_status: true,
         },
-        0,
+        ToolTotal::Exact(0),
         0,
     )
     .into_iter()
