@@ -24,6 +24,7 @@ use crate::cost_accounting::suggestions;
 use crate::hashing::{canonical_json, sha256_hex};
 use crate::idempotency::{GuardOutcome, IdempotencyReservation, derive_key, enforce};
 use crate::identity_grants::{GrantScope, GrantSubject, IdentityGrantRequest};
+use crate::kill_switch::KillCause;
 use crate::playbook::PlaybookEngine;
 use crate::protocol::mrtr::{InputRequired, Refusal};
 use crate::provider::Transform as _;
@@ -460,6 +461,41 @@ fn unbindable_continuation(server: &str, tool: &str) -> Error {
             "Tool '{tool}' on server '{server}' asked for input, but this exchange cannot be \
              continued for this caller"
         ),
+        data: None,
+    }
+}
+
+/// The refusal a caller sees when a backend is disabled, named by its cause.
+///
+/// Both causes reach the same disabled state, so a message that names either
+/// one is wrong whenever the other acted. This reports the cause the kill set
+/// recorded instead.
+///
+/// The two causes need different next steps, so both messages carry one. An
+/// operator kill ends with a human decision and `gateway_revive_server` undoes
+/// it. An exhausted budget does not undo itself — nothing revives a backend on
+/// a timer — so that message says so, because a caller who is not told will
+/// assume the backend comes back.
+fn server_disabled(server: &str, cause: KillCause) -> Error {
+    let message = match cause {
+        KillCause::Operator => format!(
+            "Server '{server}' was disabled by an operator via gateway_kill_server. \
+             Re-enable it with gateway_revive_server."
+        ),
+        KillCause::ErrorBudget {
+            error_rate,
+            threshold,
+        } => format!(
+            "Server '{server}' was disabled automatically: its error budget was exhausted \
+             ({:.0}% failures against a {:.0}% threshold). It does not re-enable itself — \
+             use gateway_revive_server to restore it, or gateway_list_servers to inspect it.",
+            error_rate * 100.0,
+            threshold * 100.0
+        ),
+    };
+    Error::JsonRpc {
+        code: -32000,
+        message,
         data: None,
     }
 }
@@ -1575,11 +1611,8 @@ impl MetaMcp {
 
         tracing::Span::current().record("trace_id", trace_id);
 
-        if self.kill_switch.is_killed(server) {
-            return Err(Error::json_rpc(
-                -32000,
-                format!("Server '{server}' is currently disabled by operator kill switch"),
-            ));
+        if let Some(cause) = self.kill_switch.kill_cause(server) {
+            return Err(server_disabled(server, cause));
         }
 
         {

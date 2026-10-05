@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use std::time::Duration;
 
-use super::KillSwitch;
 use super::budget::{BudgetWindow, CapabilityErrorBudgetConfig, ErrorBudgetConfig};
+use super::{KillCause, KillSwitch};
 
 // ── KillSwitch::kill / revive / is_killed ────────────────────────────────
 
@@ -47,6 +47,74 @@ fn revive_is_idempotent() {
 fn unknown_server_is_not_killed() {
     let ks = KillSwitch::new();
     assert!(!ks.is_killed("nonexistent"));
+}
+
+// ── KillSwitch::kill_cause ───────────────────────────────────────────────
+
+#[test]
+fn a_live_server_has_no_cause() {
+    // GIVEN: a live server
+    let ks = KillSwitch::new();
+    // THEN: nothing reports it as disabled, so there is no cause to give
+    assert_eq!(ks.kill_cause("srv"), None);
+}
+
+#[test]
+fn an_operator_kill_reports_itself_as_the_cause() {
+    // GIVEN: a live server
+    let ks = KillSwitch::new();
+    // WHEN: an operator kills it
+    ks.kill("srv");
+    // THEN: the cause is the operator, not the budget
+    assert_eq!(ks.kill_cause("srv"), Some(KillCause::Operator));
+}
+
+#[test]
+fn an_exhausted_budget_reports_itself_as_the_cause() {
+    // GIVEN: window of 4 calls, threshold 0.5
+    let ks = KillSwitch::new();
+    let (size, dur, thresh) = (4, Duration::from_secs(300), 0.5);
+    ks.record_success("srv", size, dur);
+    ks.record_success("srv", size, dur);
+    // WHEN: failures tip the rate to the threshold and auto-kill it
+    ks.record_failure("srv", size, dur, thresh, NO_MIN);
+    let triggered = ks.record_failure("srv", size, dur, thresh, NO_MIN);
+    assert!(triggered, "the second failure should exhaust the budget");
+    // THEN: the cause is the budget, carrying the rate it fired at, so a refusal
+    // can report the budget rather than naming an operator who did not act.
+    match ks.kill_cause("srv") {
+        Some(KillCause::ErrorBudget {
+            error_rate,
+            threshold,
+        }) => {
+            assert!(
+                (error_rate - 0.5).abs() < f64::EPSILON,
+                "error_rate should be the rate at which it fired, got {error_rate}"
+            );
+            assert!(
+                (threshold - 0.5).abs() < f64::EPSILON,
+                "threshold should be the configured one, got {threshold}"
+            );
+        }
+        other => panic!("expected an error-budget cause, got {other:?}"),
+    }
+}
+
+#[test]
+fn revive_clears_the_cause() {
+    // GIVEN: a server disabled by its budget
+    let ks = KillSwitch::new();
+    let (size, dur, thresh) = (4, Duration::from_secs(300), 0.5);
+    ks.record_success("srv", size, dur);
+    ks.record_success("srv", size, dur);
+    ks.record_failure("srv", size, dur, thresh, NO_MIN);
+    ks.record_failure("srv", size, dur, thresh, NO_MIN);
+    assert!(ks.is_killed("srv"));
+    // WHEN: an operator revives it
+    ks.revive("srv");
+    // THEN: it is live and reports no cause
+    assert!(!ks.is_killed("srv"));
+    assert_eq!(ks.kill_cause("srv"), None);
 }
 
 #[test]

@@ -29,7 +29,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use dashmap::DashSet;
 use tracing::{info, warn};
 
 use budget::BudgetWindow;
@@ -75,6 +74,30 @@ pub(crate) fn decide_budget_action(
 // Kill switch
 // ============================================================================
 
+/// Why a backend is disabled.
+///
+/// Two paths set the same disabled state — an operator calling
+/// `gateway_kill_server`, and the backend's own error budget being exhausted.
+/// The state alone cannot tell them apart, so a refusal that named either one
+/// was wrong half the time. Recording the cause beside the state is what lets a
+/// refusal report the path that actually acted.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum KillCause {
+    /// Disabled deliberately, by `gateway_kill_server`.
+    Operator,
+    /// Disabled by this backend's own error budget.
+    ///
+    /// Carries the two numbers the caller needs to judge it, both as the budget
+    /// saw them when it fired, so the refusal can name the rate and the
+    /// threshold the rate was measured against.
+    ErrorBudget {
+        /// Failure rate over the budget window when it was exhausted.
+        error_rate: f64,
+        /// The rate the backend's configuration treats as exhausted.
+        threshold: f64,
+    },
+}
+
 /// Operator-controlled kill switch for backend servers with per-capability
 /// error budgets.
 ///
@@ -82,8 +105,8 @@ pub(crate) fn decide_budget_action(
 /// reads on every `gateway_invoke` call. Writes (kill/revive) are rare.
 #[derive(Debug, Default)]
 pub struct KillSwitch {
-    /// Set of backend server names that are currently disabled.
-    killed: DashSet<String>,
+    /// Backend server names that are currently disabled, with why.
+    killed: DashMap<String, KillCause>,
     /// Per-backend error budgets (sliding window).
     budgets: DashMap<String, Arc<parking_lot::Mutex<BudgetWindow>>>,
     /// Per-capability error budgets.
@@ -103,7 +126,7 @@ impl KillSwitch {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            killed: DashSet::new(),
+            killed: DashMap::new(),
             budgets: DashMap::new(),
             capability_budgets: DashMap::new(),
             disabled_capabilities: DashMap::new(),
@@ -116,7 +139,11 @@ impl KillSwitch {
     ///
     /// Idempotent — calling this on an already-killed server is a no-op.
     pub fn kill(&self, server: &str) {
-        if self.killed.insert(server.to_string()) {
+        if self
+            .killed
+            .insert(server.to_string(), KillCause::Operator)
+            .is_none()
+        {
             warn!(server = server, "Kill switch engaged: server disabled");
         }
     }
@@ -139,13 +166,23 @@ impl KillSwitch {
     #[must_use]
     #[inline]
     pub fn is_killed(&self, server: &str) -> bool {
-        self.killed.contains(server)
+        self.killed.contains_key(server)
+    }
+
+    /// Why `server` is disabled, or `None` when it is live.
+    #[must_use]
+    #[inline]
+    pub fn kill_cause(&self, server: &str) -> Option<KillCause> {
+        self.killed.get(server).map(|entry| *entry.value())
     }
 
     /// Returns the set of currently-killed server names (snapshot).
     #[must_use]
     pub fn killed_servers(&self) -> Vec<String> {
-        self.killed.iter().map(|s| s.clone()).collect()
+        self.killed
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     // ── Backend error budget ──────────────────────────────────────────────────
@@ -207,7 +244,13 @@ impl KillSwitch {
                     threshold = threshold,
                     "Error budget exhausted — auto-killing server"
                 );
-                self.killed.insert(server.to_string());
+                self.killed.insert(
+                    server.to_string(),
+                    KillCause::ErrorBudget {
+                        error_rate: rate,
+                        threshold,
+                    },
+                );
                 return true;
             }
             BudgetAction::Ignore => {}
